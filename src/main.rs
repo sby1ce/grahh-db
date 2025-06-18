@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::LazyLock,
+};
 
 use chrono::Utc;
 
@@ -12,8 +15,10 @@ impl Key {
     }
 }
 
+static EMPTY_HASHSET: LazyLock<HashSet<Key>> = LazyLock::new(HashSet::new);
+
 /// TODO: it's possible to connect to the same node more than once with different kinds
-/// 
+///
 /// TODO: it's possible to a node to connect to itself
 #[derive(Debug)]
 struct Node {
@@ -48,6 +53,9 @@ impl Node {
             let nodes = HashSet::from([key]);
             self.connections.insert(kind, nodes);
         }
+    }
+    pub fn get_connections(&self, kind: &str) -> &HashSet<Key> {
+        self.connections.get(kind).unwrap_or(&EMPTY_HASHSET)
     }
 }
 
@@ -86,6 +94,12 @@ impl Database {
         node1.connect(first_kind, second);
         node2.connect(second_kind, first);
     }
+    pub fn select(&self, key: &Key, kind: &str) -> &HashSet<Key> {
+        let Some(node) = self.inner.get(key) else {
+            return &EMPTY_HASHSET;
+        };
+        node.get_connections(kind)
+    }
 }
 
 fn main() {
@@ -94,7 +108,7 @@ fn main() {
     let key2 = db.insert("World".to_owned()).0;
     assert_ne!(key1, key2);
     db.connect(key1, "_".to_owned(), key2, "!".to_owned());
-    println!("{db:#?}");
+    println!("{:?}", db.select(&key2, "!"));
     let _ = db.remove(key1);
     println!("{db:#?}");
 }
