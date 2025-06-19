@@ -1,6 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
-    sync::LazyLock,
+    any::Any, collections::{HashMap, HashSet}, sync::LazyLock
 };
 
 use chrono::Utc;
@@ -22,18 +21,18 @@ static EMPTY_HASHSET: LazyLock<HashSet<Key>> = LazyLock::new(HashSet::new);
 /// TODO: it's possible to a node to connect to itself
 #[derive(Debug)]
 struct Node {
-    value: String,
+    value: Box<dyn Any>,
     connections: HashMap<String, HashSet<Key>>,
 }
 
 impl Node {
-    pub fn new(value: String) -> Self {
+    pub fn new(value: Box<dyn Any>) -> Self {
         Self {
             value,
             connections: HashMap::new(),
         }
     }
-    pub fn destruct(self) -> (impl Iterator<Item = Key>, String) {
+    pub fn destruct(self) -> (impl Iterator<Item = Key>, Box<dyn Any>) {
         (
             self.connections
                 .into_iter()
@@ -57,6 +56,9 @@ impl Node {
     pub fn get_connections(&self, kind: &str) -> &HashSet<Key> {
         self.connections.get(kind).unwrap_or(&EMPTY_HASHSET)
     }
+    pub fn value(&self) -> &Box<dyn Any> {
+        &self.value
+    }
 }
 
 #[derive(Debug)]
@@ -70,13 +72,13 @@ impl Database {
             inner: HashMap::new(),
         }
     }
-    pub fn insert(&mut self, value: String) -> (Key, Option<String>) {
+    pub fn insert(&mut self, value: Box<dyn Any>) -> (Key, Option<Box<dyn Any>>) {
         let key = Key::generate();
         let node = Node::new(value);
         let previous = self.inner.insert(key, node);
         (key, previous.map(|node| node.value))
     }
-    pub fn remove(&mut self, key: Key) -> Option<String> {
+    pub fn remove(&mut self, key: Key) -> Option<Box<dyn Any>> {
         let node = self.inner.remove(&key)?;
         let (connections, value) = node.destruct();
         for ref connected in connections {
@@ -100,15 +102,21 @@ impl Database {
         };
         node.get_connections(kind)
     }
+    pub fn get<T: 'static>(&self, key: &Key) -> Option<&T> {
+        self.inner.get(key)?.value().downcast_ref()
+    }
 }
 
 fn main() {
     let mut db = Database::new();
-    let key1 = db.insert("Hello".to_owned()).0;
-    let key2 = db.insert("World".to_owned()).0;
+    let key1 = db.insert(Box::new("Hello".to_owned())).0;
+    let key2 = db.insert(Box::new("World".to_owned())).0;
     assert_ne!(key1, key2);
     db.connect(key1, "_".to_owned(), key2, "!".to_owned());
-    println!("{:?}", db.select(&key2, "!"));
+    let connections = db.select(&key2, "!");
+    println!("{:?}", connections);
+    let connected: &String = db.get(connections.into_iter().next().unwrap()).unwrap();
+    println!("{connected:?}");
     let _ = db.remove(key1);
     println!("{db:#?}");
 }
