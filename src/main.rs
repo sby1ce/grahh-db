@@ -1,11 +1,13 @@
 use std::{
-    any::Any, collections::{HashMap, HashSet}, sync::LazyLock
+    collections::{HashMap, HashSet},
+    sync::LazyLock,
 };
 
 use chrono::Utc;
+use serde::{Serialize, de::DeserializeOwned};
 
 /// key struct that is only gien out by the database to prevent non-existent keys
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 struct Key(u64);
 
 impl Key {
@@ -14,25 +16,38 @@ impl Key {
     }
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct Value(Vec<u8>);
+
+impl Value {
+    pub fn serialize(value: &impl Serialize) -> Self {
+        Self(postcard::to_allocvec(value).unwrap())
+    }
+    pub fn deserialize<T: DeserializeOwned>(&self) -> T {
+        postcard::from_bytes(&self.0).unwrap()
+    }
+}
+
 static EMPTY_HASHSET: LazyLock<HashSet<Key>> = LazyLock::new(HashSet::new);
 
 /// TODO: it's possible to connect to the same node more than once with different kinds
 ///
 /// TODO: it's possible to a node to connect to itself
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Node {
-    value: Box<dyn Any>,
+    value: Value,
     connections: HashMap<String, HashSet<Key>>,
 }
 
 impl Node {
-    pub fn new(value: Box<dyn Any>) -> Self {
+    pub fn new(value: &impl Serialize) -> Self {
+        let value = Value::serialize(value);
         Self {
             value,
             connections: HashMap::new(),
         }
     }
-    pub fn destruct(self) -> (impl Iterator<Item = Key>, Box<dyn Any>) {
+    pub fn destruct(self) -> (impl Iterator<Item = Key>, Value) {
         (
             self.connections
                 .into_iter()
@@ -56,12 +71,12 @@ impl Node {
     pub fn get_connections(&self, kind: &str) -> &HashSet<Key> {
         self.connections.get(kind).unwrap_or(&EMPTY_HASHSET)
     }
-    pub fn value(&self) -> &Box<dyn Any> {
+    pub fn value(&self) -> &Value {
         &self.value
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Database {
     inner: HashMap<Key, Node>,
 }
@@ -72,13 +87,13 @@ impl Database {
             inner: HashMap::new(),
         }
     }
-    pub fn insert(&mut self, value: Box<dyn Any>) -> (Key, Option<Box<dyn Any>>) {
+    pub fn insert<I: Serialize>(&mut self, value: &I) -> (Key, Option<Value>) {
         let key = Key::generate();
         let node = Node::new(value);
         let previous = self.inner.insert(key, node);
         (key, previous.map(|node| node.value))
     }
-    pub fn remove(&mut self, key: Key) -> Option<Box<dyn Any>> {
+    pub fn remove(&mut self, key: Key) -> Option<Value> {
         let node = self.inner.remove(&key)?;
         let (connections, value) = node.destruct();
         for ref connected in connections {
@@ -102,21 +117,23 @@ impl Database {
         };
         node.get_connections(kind)
     }
-    pub fn get<T: 'static>(&self, key: &Key) -> Option<&T> {
-        self.inner.get(key)?.value().downcast_ref()
+    pub fn get(&self, key: &Key) -> Option<&Value> {
+        Some(self.inner.get(key)?.value())
     }
 }
 
 fn main() {
     let mut db = Database::new();
-    let key1 = db.insert(Box::new("Hello".to_owned())).0;
-    let key2 = db.insert(Box::new("World".to_owned())).0;
+    let key1 = db.insert(&["Hello"]).0;
+    let key2 = db.insert(&["World"]).0;
     assert_ne!(key1, key2);
     db.connect(key1, "_".to_owned(), key2, "!".to_owned());
     let connections = db.select(&key2, "!");
     println!("{:?}", connections);
-    let connected: &String = db.get(connections.into_iter().next().unwrap()).unwrap();
+    let connected: &Value = db.get(connections.into_iter().next().unwrap()).unwrap();
     println!("{connected:?}");
+    let retrieved: [String; 1] = connected.deserialize();
+    println!("{retrieved:?}");
     let _ = db.remove(key1);
     println!("{db:#?}");
 }
