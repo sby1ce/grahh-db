@@ -9,7 +9,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 /// key struct that is only gien out by the database to prevent non-existent keys
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-struct Key(u64);
+pub struct Key(u64);
 
 impl Key {
     pub fn generate() -> Self {
@@ -18,7 +18,7 @@ impl Key {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct Value(Vec<u8>);
+pub struct Value(Vec<u8>);
 
 impl Value {
     pub fn serialize(value: &impl Serialize) -> Self {
@@ -78,7 +78,7 @@ impl Node {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct Database {
+pub struct Database {
     inner: HashMap<Key, Node>,
 }
 
@@ -140,21 +140,4 @@ impl Database {
         let mut buffer = vec![0; file.metadata().unwrap().len() as usize];
         postcard::from_io((file, &mut buffer)).unwrap().0
     }
-}
-
-fn main() {
-    let mut db = Database::load();
-    let key1 = db.insert(&["Hello"]).0;
-    let key2 = db.insert(&["World"]).0;
-    assert_ne!(key1, key2);
-    db.connect(key1, "_".to_owned(), key2, "!".to_owned());
-    let connections = db.select(&key2, "!");
-    println!("{:?}", connections);
-    let connected: &Value = db.get(connections.iter().next().unwrap()).unwrap();
-    println!("{connected:?}");
-    let retrieved: [String; 1] = connected.deserialize();
-    println!("{retrieved:?}");
-    let _ = db.remove(key1);
-    println!("{db:#?}");
-    db.save();
 }
