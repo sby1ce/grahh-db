@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    fs::OpenOptions,
     sync::LazyLock,
 };
 
@@ -82,11 +83,6 @@ struct Database {
 }
 
 impl Database {
-    pub fn new() -> Self {
-        Self {
-            inner: HashMap::new(),
-        }
-    }
     pub fn insert<I: Serialize>(&mut self, value: &I) -> (Key, Option<Value>) {
         let key = Key::generate();
         let node = Node::new(value);
@@ -120,20 +116,45 @@ impl Database {
     pub fn get(&self, key: &Key) -> Option<&Value> {
         Some(self.inner.get(key)?.value())
     }
+    const DB_NAME: &str = "db.grahh";
+    pub fn save(&self) {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(Self::DB_NAME)
+            .unwrap();
+        postcard::to_io(self, &mut file).unwrap();
+    }
+    pub fn load() -> Self {
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .open(Self::DB_NAME)
+            .unwrap();
+        if file.metadata().unwrap().len() == 0 {
+            return Self {
+                inner: HashMap::new(),
+            };
+        }
+        let mut buffer = vec![0; file.metadata().unwrap().len() as usize];
+        postcard::from_io((file, &mut buffer)).unwrap().0
+    }
 }
 
 fn main() {
-    let mut db = Database::new();
+    let mut db = Database::load();
     let key1 = db.insert(&["Hello"]).0;
     let key2 = db.insert(&["World"]).0;
     assert_ne!(key1, key2);
     db.connect(key1, "_".to_owned(), key2, "!".to_owned());
     let connections = db.select(&key2, "!");
     println!("{:?}", connections);
-    let connected: &Value = db.get(connections.into_iter().next().unwrap()).unwrap();
+    let connected: &Value = db.get(connections.iter().next().unwrap()).unwrap();
     println!("{connected:?}");
     let retrieved: [String; 1] = connected.deserialize();
     println!("{retrieved:?}");
     let _ = db.remove(key1);
     println!("{db:#?}");
+    db.save();
 }
