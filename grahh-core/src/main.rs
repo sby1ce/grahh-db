@@ -1,7 +1,9 @@
+use std::path::PathBuf;
+
 use grahh_db::{Database, Value};
 
 fn main() {
-    let mut db = Database::load();
+    let mut db = Database::load(PathBuf::from("db.grahh"));
     let key1 = db.insert(&["Hello"]).0;
     let key2 = db.insert(&["World"]).0;
     assert_ne!(key1, key2);

@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs::OpenOptions,
+    path::PathBuf,
     sync::LazyLock,
 };
 
@@ -35,7 +36,7 @@ static EMPTY_HASHSET: LazyLock<HashSet<Key>> = LazyLock::new(HashSet::new);
 ///
 /// TODO: it's possible to a node to connect to itself
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct Node {
+pub struct Node {
     value: Value,
     connections: HashMap<String, HashSet<Key>>,
 }
@@ -77,9 +78,10 @@ impl Node {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug)]
 pub struct Database {
     inner: HashMap<Key, Node>,
+    path: PathBuf,
 }
 
 impl Database {
@@ -116,28 +118,30 @@ impl Database {
     pub fn get(&self, key: &Key) -> Option<&Value> {
         Some(self.inner.get(key)?.value())
     }
-    const DB_NAME: &str = "db.grahh";
     pub fn save(&self) {
         let mut file = OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
-            .open(Self::DB_NAME)
+            .open(&self.path)
             .unwrap();
-        postcard::to_io(self, &mut file).unwrap();
+        postcard::to_io(&self.inner, &mut file).unwrap();
     }
-    pub fn load() -> Self {
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .open(Self::DB_NAME)
-            .unwrap();
-        if file.metadata().unwrap().len() == 0 {
+    pub fn load(path: PathBuf) -> Self {
+        if !path.is_file() {
+            let _ = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
             return Self {
                 inner: HashMap::new(),
+                path,
             };
         }
+        let file = OpenOptions::new().read(true).open(&path).unwrap();
         let mut buffer = vec![0; file.metadata().unwrap().len() as usize];
-        postcard::from_io((file, &mut buffer)).unwrap().0
+        let inner = postcard::from_io((file, &mut buffer)).unwrap().0;
+        Self { inner, path }
     }
 }
