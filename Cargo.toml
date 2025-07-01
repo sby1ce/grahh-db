@@ -1,11 +1,9 @@
-[workspace]
-members = [ 
-    "grahh-core",
-]
-resolver = "2"
+[package]
+name = "grass-db"
+version = "0.1.0"
+edition = "2024"
 
-[profile.release]
-codegen-units = 1
-lto = "fat"
-panic = "abort"
-strip = "symbols"
+[dependencies]
+chrono = "0.4.*"
+postcard = { version = "1.1.*", features = ["alloc", "use-std"] }
+serde = { version = "1.0.*", features = ["derive"] }
