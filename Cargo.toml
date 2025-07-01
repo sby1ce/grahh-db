@@ -1,7 +1,8 @@
 [package]
-name = "grass-db"
+name = "grahh-db"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [dependencies]
 chrono = "0.4.*"
