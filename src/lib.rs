@@ -78,51 +78,33 @@ impl Node {
     }
 }
 
-pub trait Persist {
-    fn save(&self, data: &HashMap<Key, Node>);
-    fn load(&self) -> HashMap<Key, Node>;
+#[derive(Debug)]
+pub enum Storage {
+    Memory,
+    File(PathBuf),
 }
 
-impl Persist for () {
-    fn load(&self) -> HashMap<Key, Node> {
-        HashMap::new()
-    }
-    fn save(&self, _data: &HashMap<Key, Node>) {}
-}
-
-impl Persist for PathBuf {
-    fn load(&self) -> HashMap<Key, Node> {
-        if !self.is_file() {
-            let _ = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&self)
-                .unwrap();
-            return HashMap::new();
-        }
-        let file = OpenOptions::new().read(true).open(&self).unwrap();
-        let mut buffer = vec![0; file.metadata().unwrap().len() as usize];
-        let inner = postcard::from_io((file, &mut buffer)).unwrap().0;
-        inner
-    }
+impl Storage {
     fn save(&self, data: &HashMap<Key, Node>) {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&self)
-            .unwrap();
-        postcard::to_io(data, &mut file).unwrap();
+        if let Self::File(path) = self {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(path)
+                .unwrap();
+            postcard::to_io(data, &mut file).unwrap();
+        }
     }
 }
 
 #[derive(Debug)]
-pub struct Database<P: Persist = ()> {
+pub struct Database {
     inner: HashMap<Key, Node>,
-    storage: P,
+    storage: Storage,
 }
 
-impl<P: Persist> Database<P> {
+impl Database {
     pub fn insert<I: Serialize>(&mut self, value: &I) -> (Key, Option<Value>) {
         let key = Key::generate();
         let node = Node::new(value);
@@ -156,26 +138,34 @@ impl<P: Persist> Database<P> {
     pub fn get(&self, key: &Key) -> Option<&Value> {
         Some(self.inner.get(key)?.value())
     }
+    pub fn load(path: PathBuf) -> Self {
+        let inner = {
+            if !path.is_file() {
+                let _ = OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&path)
+                    .unwrap();
+                HashMap::new()
+            } else {
+                let file = OpenOptions::new().read(true).open(&path).unwrap();
+                let mut buffer = vec![0; file.metadata().unwrap().len() as usize];
+                let inner = postcard::from_io((file, &mut buffer)).unwrap().0;
+                inner
+            }
+        };
+        Self {
+            inner,
+            storage: Storage::File(path),
+        }
+    }
     pub fn save(&self) {
         self.storage.save(&self.inner);
     }
-}
-
-impl Database {
     pub fn in_memory() -> Self {
         Self {
-            inner: ().load(),
-            storage: (),
-        }
-    }
-}
-
-impl Database<PathBuf> {
-    pub fn load(path: PathBuf) -> Self {
-        let inner = path.load();
-        Self {
-            inner,
-            storage: path,
+            inner: HashMap::new(),
+            storage: Storage::Memory,
         }
     }
 }
