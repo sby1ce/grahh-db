@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    fmt::Display,
     fs::OpenOptions,
     path::PathBuf,
     sync::LazyLock,
@@ -18,6 +19,12 @@ impl Key {
     }
 }
 
+impl Display for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Key({})", self.0)
+    }
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Value(Vec<u8>);
 
@@ -27,6 +34,9 @@ impl Value {
     }
     pub fn deserialize<T: DeserializeOwned>(&self) -> T {
         postcard::from_bytes(&self.0).unwrap()
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -137,6 +147,9 @@ impl Database {
     }
     pub fn get(&self, key: &Key) -> Option<&Value> {
         Some(self.inner.get(key)?.value())
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&Key, &Node)> {
+        self.inner.iter()
     }
     pub fn load(path: PathBuf) -> Self {
         let inner = {
