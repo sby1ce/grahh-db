@@ -151,12 +151,29 @@ impl Database {
         }
         Some(value)
     }
-    pub fn connect(&mut self, first: Key, first_kind: String, second: Key, second_kind: String) {
-        let [Some(node1), Some(node2)] = self.inner.get_disjoint_mut([&first, &second]) else {
-            panic!("keys {first:?} {second:?} were non-existent!?");
+    pub fn connect(
+        &mut self,
+        first_key: Key,
+        first_kind: String,
+        second_key: Key,
+        second_kind: String,
+    ) -> bool {
+        let [Some(node1), Some(node2)] = self.inner.get_disjoint_mut([&first_key, &second_key])
+        else {
+            return false;
         };
-        node1.connect(first_kind, second);
-        node2.connect(second_kind, first);
+        node1.connect(first_kind, second_key);
+        node2.connect(second_kind, first_key);
+        true
+    }
+    pub fn disconnect(&mut self, first_key: &Key, second_key: &Key) -> bool {
+        let [Some(node1), Some(node2)] = self.inner.get_disjoint_mut([first_key, second_key])
+        else {
+            return false;
+        };
+        node1.remove_connection(second_key);
+        node2.remove_connection(first_key);
+        true
     }
     pub fn select(&self, key: &Key, kind: &str) -> &HashSet<Key> {
         let Some(node) = self.inner.get(key) else {
