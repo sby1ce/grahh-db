@@ -2,20 +2,29 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
     fs::OpenOptions,
+    num::ParseIntError,
     path::PathBuf,
     sync::LazyLock,
 };
 
 use chrono::Utc;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// key struct that is only gien out by the database to prevent non-existent keys
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Key(u64);
 
+#[derive(Error, Debug)]
+#[error("invalid key")]
+pub struct KeyParseError(#[from] ParseIntError);
+
 impl Key {
     pub fn generate() -> Self {
         Self(u64::try_from(Utc::now().timestamp_nanos_opt().unwrap()).unwrap())
+    }
+    pub fn parse(key: &str) -> Result<Self, KeyParseError> {
+        Ok(Self(key.parse()?))
     }
 }
 
@@ -32,8 +41,11 @@ impl Value {
     pub fn serialize(value: &impl Serialize) -> Self {
         Self(postcard::to_allocvec(value).unwrap())
     }
-    pub fn deserialize<T: DeserializeOwned>(&self) -> T {
-        postcard::from_bytes(&self.0).unwrap()
+    pub fn deserialize<'a, T: Deserialize<'a>>(&'a self) -> Option<T> {
+        postcard::from_bytes(&self.0).ok()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.len() == 0
     }
     pub fn len(&self) -> usize {
         self.0.len()
@@ -80,6 +92,11 @@ impl Node {
             self.connections.insert(kind, nodes);
         }
     }
+    pub fn connections(&self) -> impl Iterator<Item = (&str, usize)> {
+        self.connections.iter().filter_map(|(kind, connections)| {
+            (!connections.is_empty()).then_some((kind.as_str(), connections.len()))
+        })
+    }
     pub fn get_connections(&self, kind: &str) -> &HashSet<Key> {
         self.connections.get(kind).unwrap_or(&EMPTY_HASHSET)
     }
@@ -115,11 +132,13 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn insert<I: Serialize>(&mut self, value: &I) -> (Key, Option<Value>) {
+    pub fn create<I: Serialize>(&mut self, value: &I) -> Key {
         let key = Key::generate();
         let node = Node::new(value);
-        let previous = self.inner.insert(key, node);
-        (key, previous.map(|node| node.value))
+        // this should always be `None` because otherwise we're having key generator collisions
+        let previous: Option<Node> = self.inner.insert(key, node);
+        assert!(previous.is_none(), "we're having key generator collisions");
+        key
     }
     pub fn remove(&mut self, key: Key) -> Option<Value> {
         let node = self.inner.remove(&key)?;
@@ -145,8 +164,8 @@ impl Database {
         };
         node.get_connections(kind)
     }
-    pub fn get(&self, key: &Key) -> Option<&Value> {
-        Some(self.inner.get(key)?.value())
+    pub fn get(&self, key: &Key) -> Option<&Node> {
+        self.inner.get(key)
     }
     pub fn iter(&self) -> impl Iterator<Item = (&Key, &Node)> {
         self.inner.iter()
@@ -163,8 +182,7 @@ impl Database {
             } else {
                 let file = OpenOptions::new().read(true).open(&path).unwrap();
                 let mut buffer = vec![0; file.metadata().unwrap().len() as usize];
-                let inner = postcard::from_io((file, &mut buffer)).unwrap().0;
-                inner
+                postcard::from_io((file, &mut buffer)).unwrap().0
             }
         };
         Self {
