@@ -1,18 +1,29 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
+    io::Write,
     num::ParseIntError,
     path::PathBuf,
     sync::LazyLock,
 };
 
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use rkyv::{
+    Portable,
+    api::high::{HighSerializer, HighValidator},
+    bytecheck::CheckBytes,
+    collections::swiss_table::ArchivedHashMap,
+    ser::allocator::ArenaHandle,
+    util::AlignedVec,
+};
 use thiserror::Error;
 
 /// key struct that is only gien out by the database to prevent non-existent keys
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(compare(PartialEq), derive(Debug, Hash, PartialEq, Eq))]
 pub struct Key(u64);
 
 #[derive(Error, Debug)]
@@ -34,15 +45,20 @@ impl Display for Key {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct Value(Vec<u8>);
 
 impl Value {
-    pub fn serialize(value: &impl Serialize) -> Self {
-        Self(postcard::to_allocvec(value).unwrap())
+    pub fn serialize(
+        value: &impl for<'a> rkyv::Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rancor::Error>>,
+    ) -> Self {
+        Self(rkyv::to_bytes::<rancor::Error>(value).unwrap().into_vec())
     }
-    pub fn deserialize<'a, T: Deserialize<'a>>(&'a self) -> Option<T> {
-        postcard::from_bytes(&self.0).ok()
+    pub fn deserialize<T: Portable + for<'a> CheckBytes<HighValidator<'a, rancor::Error>>>(
+        &self,
+    ) -> Option<&T> {
+        rkyv::access::<T, _>(&self.0).ok()
     }
     pub fn is_empty(&self) -> bool {
         self.0.len() == 0
@@ -57,14 +73,17 @@ static EMPTY_HASHSET: LazyLock<HashSet<Key>> = LazyLock::new(HashSet::new);
 /// TODO: it's possible to connect to the same node more than once with different kinds
 ///
 /// TODO: it's possible to a node to connect to itself
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(derive(Debug))]
 pub struct Node {
     value: Value,
     connections: HashMap<String, HashSet<Key>>,
 }
 
 impl Node {
-    pub fn new(value: &impl Serialize) -> Self {
+    pub fn new(
+        value: &impl for<'a> rkyv::Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rancor::Error>>,
+    ) -> Self {
         let value = Value::serialize(value);
         Self {
             value,
@@ -120,7 +139,8 @@ impl Storage {
                 .write(true)
                 .open(path)
                 .unwrap();
-            postcard::to_io(data, &mut file).unwrap();
+            let bytes = rkyv::to_bytes::<rancor::Error>(data).unwrap();
+            file.write_all(&bytes).unwrap();
         }
     }
 }
@@ -132,7 +152,10 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn create<I: Serialize>(&mut self, value: &I) -> Key {
+    pub fn create(
+        &mut self,
+        value: &impl for<'a> rkyv::Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rancor::Error>>,
+    ) -> Key {
         let key = Key::generate();
         let node = Node::new(value);
         // this should always be `None` because otherwise we're having key generator collisions
@@ -188,7 +211,7 @@ impl Database {
         self.inner.iter()
     }
     pub fn load(path: PathBuf) -> Self {
-        let inner = {
+        let inner: HashMap<Key, Node> = {
             if !path.is_file() {
                 let _ = OpenOptions::new()
                     .create_new(true)
@@ -197,9 +220,13 @@ impl Database {
                     .unwrap();
                 HashMap::new()
             } else {
-                let file = OpenOptions::new().read(true).open(&path).unwrap();
-                let mut buffer = vec![0; file.metadata().unwrap().len() as usize];
-                postcard::from_io((file, &mut buffer)).unwrap().0
+                let bytes: Vec<u8> = fs::read(&path).unwrap();
+                let archive: &ArchivedHashMap<ArchivedKey, ArchivedNode> = rkyv::access::<
+                    ArchivedHashMap<ArchivedKey, ArchivedNode>,
+                    rancor::Error,
+                >(&bytes)
+                .unwrap();
+                rkyv::deserialize::<_, rancor::Error>(archive).unwrap()
             }
         };
         Self {
